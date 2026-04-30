@@ -14,6 +14,8 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/lib)
 
+add_compile_options(-g)
+
 #设置全局链接库
 set(LIBS
     pthread 
@@ -23,3 +25,4 @@ set(LIBS
 add_subdirectory(src)
 add_subdirectory(memory)
 add_subdirectory(log)
+add_subdirectory(benchmarks)
