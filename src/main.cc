@@ -64,7 +64,7 @@ int main(int argc,char *argv[]) {
     KamaCache::KLfuCache<int, std::string> lfu(CAPACITY);
     //第三步启动底层网络模块
     EventLoop loop;
-    InetAddress addr(8080);
+    InetAddress addr(8080, "0.0.0.0");
     HttpServer server(&loop, addr, "HttpServer");
     server.setThreadNum(3);
     server.addRoute("GET", "/", [](const HttpRequest &, HttpResponse *response) {
