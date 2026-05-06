@@ -6,6 +6,8 @@
 class Buffer;
 class TcpConnection;
 class Timestamp;
+class HttpRequest;
+class HttpResponse;
 
 using TcpConnectionPtr = std::shared_ptr<TcpConnection>;
 using ConnectionCallback = std::function<void(const TcpConnectionPtr &)>;
@@ -16,3 +18,5 @@ using HighWaterMarkCallback = std::function<void(const TcpConnectionPtr &, size_
 using MessageCallback = std::function<void(const TcpConnectionPtr &,
                                            Buffer *,
                                            Timestamp)>;
+
+using HttpHandler = std::function<void(const HttpRequest &, HttpResponse *)>;

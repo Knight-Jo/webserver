@@ -1,61 +1,22 @@
 #include <string>
 
 #include <TcpServer.h>
+#include <HttpServer.h>
+#include <HttpRequest.h>
+#include <HttpResponse.h>
 #include <Logger.h>
 #include <sys/stat.h>
 #include <sstream>
+#include <cstdlib>
+#include <csignal>
 #include "AsyncLogging.h"
 #include "LFU.h"
 #include "memoryPool.h"
+#if defined(USE_GPERFTOOLS)
+#include <gperftools/profiler.h>
+#endif
 // 日志文件滚动大小为1MB (1*1024*1024字节)
 static const off_t kRollSize = 1*1024*1024;
-class EchoServer
-{
-public:
-    EchoServer(EventLoop *loop, const InetAddress &addr, const std::string &name)
-        : server_(loop, addr, name)
-        , loop_(loop)
-    {
-        // 注册回调函数
-        server_.setConnectionCallback(
-            std::bind(&EchoServer::onConnection, this, std::placeholders::_1));
-        
-        server_.setMessageCallback(
-            std::bind(&EchoServer::onMessage, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-
-        // 设置合适的subloop线程数量
-        server_.setThreadNum(3);
-    }
-    void start()
-    {
-        server_.start();
-    }
-
-private:
-    // 连接建立或断开的回调函数
-    void onConnection(const TcpConnectionPtr &conn)   
-    {
-        if (conn->connected())
-        {
-            LOG_INFO<<"Connection UP :"<<conn->peerAddress().toIpPort().c_str();
-        }
-        else
-        {
-            LOG_INFO<<"Connection DOWN :"<<conn->peerAddress().toIpPort().c_str();
-        }
-    }
-
-    // 可读写事件回调
-    void onMessage(const TcpConnectionPtr &conn, Buffer *buf, Timestamp time)
-    {
-        std::string msg = buf->retrieveAllAsString();
-        conn->send(msg);
-        // conn->shutdown();   // 关闭写端 底层响应EPOLLHUP => 执行closeCallback_
-    }
-    TcpServer server_;
-    EventLoop *loop_;
-
-};
 AsyncLogging* g_asyncLog = NULL;
 AsyncLogging * getAsyncLog(){
     return g_asyncLog;
@@ -69,6 +30,20 @@ AsyncLogging * getAsyncLog(){
     }
 }
 int main(int argc,char *argv[]) {
+#if defined(USE_GPERFTOOLS)
+    const char *profilePath = "./my_profile.prof";
+        // 注册信号处理，确保在打死时也能正常停止
+    ProfilerStart(profilePath);
+    signal(SIGINT, [](int) {
+        ProfilerStop();
+        exit(0);
+    });
+    signal(SIGTERM, [](int) {
+        ProfilerStop();
+        exit(0);
+    });
+    std::atexit(ProfilerStop);
+#endif
     //第一步启动日志，双缓冲异步写入磁盘.
     //创建一个文件夹
     const std::string LogDir="logs";
@@ -90,7 +65,16 @@ int main(int argc,char *argv[]) {
     //第三步启动底层网络模块
     EventLoop loop;
     InetAddress addr(8080);
-    EchoServer server(&loop, addr, "EchoServer");
+    HttpServer server(&loop, addr, "HttpServer");
+    server.setThreadNum(3);
+    server.addRoute("GET", "/", [](const HttpRequest &, HttpResponse *response) {
+        response->setHeader("Content-Type", "text/plain");
+        response->setBody("Hello, world");
+    });
+    server.addRoute("POST", "/echo", [](const HttpRequest &request, HttpResponse *response) {
+        response->setHeader("Content-Type", "text/plain");
+        response->setBody(request.body());
+    });
     server.start();
  // 主loop开始事件循环  epoll_wait阻塞 等待就绪事件(主loop只注册了监听套接字的fd，所以只会处理新连接事件)
     std::cout << "================================================Start Web Server================================================" << std::endl;
