@@ -107,6 +107,7 @@ subLoop EventLoop::loop()
 | 私有栈而非共享栈 | `attr.share_stack = NULL`, stack_size = 128KB | 实现简单，无共享栈回收复杂度 |
 | 每个完整 HTTP 请求一个协程 | `onMessage` 解析完成后创建协程 | 协程内可完整处理请求生命周期 |
 | `sendCo` 代替 `send` | 新增方法，原始 `send` 不受影响 | 兼容原有非协程代码路径 |
+| **`kPollTimeMs` 改为 100ms** | 原值 10000ms → 100ms | **关键！** 否则协程调度延迟高达 10 秒 |
 
 ---
 
@@ -354,6 +355,8 @@ void EventLoop::loop()
         co_schedule_tick();
     }
 }
+
+> ⚠️ kPollTimeMs 原值为 10000ms（10 秒），改为 **100ms**。否则协程在 `recv()`/`send()` 等 hook 中 yield 后，即使 I/O 数据在微秒级到达，也要等待最长 10 秒才能被 `co_schedule_tick()` 恢复。
 
 void EventLoop::co_schedule_tick()
 {
