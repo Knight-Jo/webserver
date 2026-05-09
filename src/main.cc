@@ -1,4 +1,6 @@
 #include <string>
+#include <cstring>
+#include <vector>
 
 #include <TcpServer.h>
 #include <CoHttpServer.h>
@@ -11,6 +13,14 @@
 #include <csignal>
 #include <fcntl.h>
 #include <unistd.h>
+
+// 阻塞 I/O 演示 —— libco hook 所需头文件
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <poll.h>
+
 #include "AsyncLogging.h"
 #include "LFU.h"
 #include "memoryPool.h"
@@ -94,6 +104,208 @@ int main(int argc,char *argv[]) {
             response->setBody(std::string(buf, n));
         }
         ::close(fd);
+    });
+
+    // ========== 阻塞 I/O 演示路由 ==========
+
+    // GET /resolve?host=example.com
+    // 演示 libco hook gethostbyname() —— DNS 解析期间协程 yield，不阻塞线程
+    server.addRoute("GET", "/resolve", [](const HttpRequest &req, HttpResponse *response) {
+        response->setHeader("Content-Type", "text/plain");
+
+        auto it = req.queryParams().find("host");
+        std::string host = (it != req.queryParams().end()) ? it->second : "localhost";
+
+        // gethostbyname() 被 libco hook
+        // 内部通过 __poll() 在 DNS socket 上等待 → 协程 yield
+        struct hostent *he = ::gethostbyname(host.c_str());
+        if (!he)
+        {
+            response->setBody("DNS resolution failed for: " + host);
+            return;
+        }
+
+        std::string result = "Host: " + host + "\nIP addresses:\n";
+        char ip[64];
+        for (int i = 0; he->h_addr_list[i]; ++i)
+        {
+            inet_ntop(he->h_addrtype, he->h_addr_list[i], ip, sizeof(ip));
+            result += "  " + std::string(ip) + "\n";
+        }
+
+        response->setBody(result);
+    });
+
+    // GET /fetch?host=HOST&port=80&path=/
+    // 在协程内部创建 TCP 连接并发送 HTTP 请求
+    // 演示 hooked: gethostbyname → socket → connect → send → recv → close
+    server.addRoute("GET", "/fetch", [](const HttpRequest &req, HttpResponse *response) {
+        response->setHeader("Content-Type", "text/plain");
+
+        // 解析参数
+        auto getParam = [&](const std::string &key, const std::string &def) -> std::string {
+            auto it = req.queryParams().find(key);
+            return (it != req.queryParams().end()) ? it->second : def;
+        };
+        std::string host = getParam("host", "httpbin.org");
+        int port = std::stoi(getParam("port", "80"));
+        std::string path = getParam("path", "/get");
+
+        // 1. DNS 解析 —— 被 libco hook，协程 yield 等待 DNS 响应
+        struct hostent *he = ::gethostbyname(host.c_str());
+        if (!he)
+        {
+            response->setBody("DNS resolution failed: " + host);
+            return;
+        }
+
+        // 2. 创建 socket —— 被 libco hook，注册到 hook 系统
+        int sock = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0)
+        {
+            response->setBody("socket() failed");
+            return;
+        }
+
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+
+        // 3. connect —— 被 libco hook
+        // 非阻塞 socket + EINPROGRESS → 进入 poll() 等待 → 协程 yield
+        // 直到 TCP 握手完成或超时（默认 75s）
+        if (::connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+        {
+            ::close(sock);
+            response->setBody("connect() failed to " + host + ":" + std::to_string(port));
+            return;
+        }
+
+        // 4. 构建并发送 HTTP GET 请求
+        std::string httpReq = "GET " + path + " HTTP/1.0\r\n"
+                              "Host: " + host + "\r\n"
+                              "Connection: close\r\n"
+                              "\r\n";
+
+        // send —— 被 libco hook，若发送缓冲区满则 yield 等待 POLLOUT
+        size_t sent = 0;
+        while (sent < httpReq.size())
+        {
+            ssize_t n = ::send(sock, httpReq.data() + sent, httpReq.size() - sent, 0);
+            if (n <= 0) break;
+            sent += n;
+        }
+
+        if (sent < httpReq.size())
+        {
+            ::close(sock);
+            response->setBody("send() failed after " + std::to_string(sent) + " bytes");
+            return;
+        }
+
+        // 5. 读取 HTTP 响应 —— recv 被 libco hook
+        // 若对端尚未发送数据，协程 yield 等待 POLLIN
+        std::string respBody;
+        char buf[4096];
+        ssize_t n;
+        while ((n = ::recv(sock, buf, sizeof(buf), 0)) > 0)
+        {
+            respBody.append(buf, n);
+        }
+
+        ::close(sock);
+
+        // 解析 HTTP 响应，提取 body（简单实现：以 \r\n\r\n 分割）
+        auto pos = respBody.find("\r\n\r\n");
+        if (pos != std::string::npos)
+        {
+            std::string headerPart = respBody.substr(0, pos);
+            std::string bodyPart = respBody.substr(pos + 4);
+
+            // 尝试在 header 中查找 Content-Length
+            auto clPos = headerPart.find("Content-Length: ");
+            if (clPos != std::string::npos)
+            {
+                auto clEnd = headerPart.find("\r\n", clPos);
+                int contentLen = std::stoi(headerPart.substr(clPos + 16, clEnd - clPos - 16));
+                bodyPart = bodyPart.substr(0, contentLen);
+            }
+
+            response->setBody(bodyPart);
+        }
+        else
+        {
+            response->setBody(respBody);
+        }
+    });
+
+    // GET /pingback?host=HOST&port=PORT
+    // 连接 -> 发送一个简单请求 -> 读取响应，演示完整的 hooked I/O 流水线
+    server.addRoute("GET", "/pingback", [](const HttpRequest &req, HttpResponse *response) {
+        auto getParam = [&](const std::string &key, const std::string &def) -> std::string {
+            auto it = req.queryParams().find(key);
+            return (it != req.queryParams().end()) ? it->second : def;
+        };
+        std::string host = getParam("host", "127.0.0.1");
+        int port = std::stoi(getParam("port", "8080"));
+
+        // 1. DNS（如果 host 是域名，会被 hook → yield）
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+
+        struct hostent *he = ::gethostbyname(host.c_str());
+        if (!he) { response->setBody("DNS failed"); return; }
+        memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+
+        // 2. socket
+        int sock = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) { response->setBody("socket failed"); return; }
+
+        // 3. connect (hook → yield)
+        if (::connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+        {
+            ::close(sock);
+            response->setBody("connect failed");
+            return;
+        }
+
+        // 4. send (hook → yield 如果发送缓冲区满)
+        const std::string httpReq = "GET / HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
+        size_t sent = 0;
+        while (sent < httpReq.size())
+        {
+            ssize_t n = ::send(sock, httpReq.data() + sent, httpReq.size() - sent, 0);
+            if (n <= 0) break;
+            sent += n;
+        }
+        if (sent < httpReq.size()) { ::close(sock); response->setBody("send failed"); return; }
+
+        // 5. recv (hook → yield 等待响应数据)
+        std::string raw;
+        char buf[4096];
+        ssize_t n;
+        while ((n = ::recv(sock, buf, sizeof(buf), 0)) > 0)
+        {
+            raw.append(buf, n);
+        }
+        ::close(sock);
+
+        std::string result;
+        result += "request: GET / HTTP/1.0\r\n";
+        result += "response length: " + std::to_string(raw.size()) + " bytes\n";
+        result += "response body:\n";
+
+        auto pos = raw.find("\r\n\r\n");
+        if (pos != std::string::npos)
+            result += raw.substr(pos + 4);
+        else
+            result += raw;
+
+        response->setBody(result);
     });
     server.start();
  // 主loop开始事件循环  epoll_wait阻塞 等待就绪事件(主loop只注册了监听套接字的fd，所以只会处理新连接事件)

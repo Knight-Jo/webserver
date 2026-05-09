@@ -17,7 +17,7 @@
 thread_local EventLoop *t_loopInThisThread = nullptr;
 
 // 定义默认的Poller IO复用接口的超时时间
-const int kPollTimeMs = 10000; // 10000毫秒 = 10秒钟
+const int kPollTimeMs = 100; // 100ms — libco 协程调度需要及时响应
 
 /* 创建线程之后主线程和子线程谁先运行是不确定的。
  * 通过一个eventfd在线程之间传递数据的好处是多个线程无需上锁就可以实现同步。
