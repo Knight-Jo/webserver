@@ -9,6 +9,7 @@ add_library(src_lib SHARED ${SRC_FILE})
 #创建可执行文件
 add_executable(main  main.cc)
 
-#链接必要的库
-target_link_libraries(main src_lib memory_lib log_lib ${LIBS})
+# 链接必要的库
+target_link_libraries(src_lib -Wl,--whole-archive colib_static -Wl,--no-whole-archive ${LIBS})
+target_link_libraries(main src_lib memory_lib log_lib colib_static ${LIBS})
 

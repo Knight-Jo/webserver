@@ -10,6 +10,10 @@
 #include "Timestamp.h"
 #include "CurrentThread.h"
 #include "TimerQueue.h"
+
+// 前置声明 libco 的 epoll 上下文结构体
+struct stCoEpoll_t;
+
 class Channel;
 class Poller;
 
@@ -36,6 +40,9 @@ public:
 
     // 通过eventfd唤醒loop所在的线程
     void wakeup();
+
+    // 驱动 libco 协程调度（每轮 EventLoop 迭代调用一次）
+    void co_schedule_tick();
 
     // EventLoop的方法 => Poller的方法
     void updateChannel(Channel *channel);

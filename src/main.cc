@@ -1,7 +1,7 @@
 #include <string>
 
 #include <TcpServer.h>
-#include <HttpServer.h>
+#include <CoHttpServer.h>
 #include <HttpRequest.h>
 #include <HttpResponse.h>
 #include <Logger.h>
@@ -9,6 +9,8 @@
 #include <sstream>
 #include <cstdlib>
 #include <csignal>
+#include <fcntl.h>
+#include <unistd.h>
 #include "AsyncLogging.h"
 #include "LFU.h"
 #include "memoryPool.h"
@@ -65,8 +67,8 @@ int main(int argc,char *argv[]) {
     //第三步启动底层网络模块
     EventLoop loop;
     InetAddress addr(8080, "0.0.0.0");
-    HttpServer server(&loop, addr, "HttpServer");
-    server.setThreadNum(3);
+    CoHttpServer server(&loop, addr, "CoHttpServer");
+    server.setThreadNum(16);
     server.addRoute("GET", "/", [](const HttpRequest &, HttpResponse *response) {
         response->setHeader("Content-Type", "text/plain");
         response->setBody("Hello, world");
@@ -74,6 +76,24 @@ int main(int argc,char *argv[]) {
     server.addRoute("POST", "/echo", [](const HttpRequest &request, HttpResponse *response) {
         response->setHeader("Content-Type", "text/plain");
         response->setBody(request.body());
+    });
+    // 协程示例：读取本地文件并返回（在协程中自动 yield/恢复）
+    server.addRoute("GET", "/file", [](const HttpRequest &, HttpResponse *response) {
+        response->setHeader("Content-Type", "text/plain");
+        int fd = ::open("/proc/self/status", O_RDONLY);
+        if (fd < 0)
+        {
+            response->setBody("open failed");
+            return;
+        }
+        // 在协程中使用 hooked read() —— 若 fd 不可读则自动 yield
+        char buf[4096];
+        ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n > 0)
+        {
+            response->setBody(std::string(buf, n));
+        }
+        ::close(fd);
     });
     server.start();
  // 主loop开始事件循环  epoll_wait阻塞 等待就绪事件(主loop只注册了监听套接字的fd，所以只会处理新连接事件)

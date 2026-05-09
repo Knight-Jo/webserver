@@ -15,6 +15,9 @@
 #include <Channel.h>
 #include <EventLoop.h>
 
+// libco 协程安全发送
+#include <co_routine.h>
+
 static EventLoop *CheckLoopNotNull(EventLoop *loop)
 {
     if (loop == nullptr)
@@ -136,6 +139,74 @@ void TcpConnection::sendInLoop(const void *data, size_t len)
         {
             channel_->enableWriting(); // 这里一定要注册channel的写事件 否则poller不会给channel通知epollout
         }
+    }
+}
+
+// 协程安全的发送：当内核发送缓冲区满时，使用 co_poll 等待 POLLOUT 事件并让出协程
+void TcpConnection::sendCo(const std::string &buf)
+{
+    if (state_ != kConnected) return;
+
+    size_t remaining = buf.size();
+    const char *data = buf.data();
+
+    // 尝试直接写入
+    if (!channel_->isWriting())
+    {
+        ssize_t nwrote = ::write(channel_->fd(), data, remaining);
+        if (nwrote >= 0)
+        {
+            if (static_cast<size_t>(nwrote) >= remaining)
+            {
+                if (writeCompleteCallback_)
+                {
+                    writeCompleteCallback_(shared_from_this());
+                }
+                return;
+            }
+            data += nwrote;
+            remaining -= nwrote;
+        }
+        else if (errno != EAGAIN && errno != EWOULDBLOCK)
+        {
+            return;
+        }
+    }
+
+    // 剩余数据需要等待 POLLOUT，使用 co_poll 让出协程
+    while (remaining > 0 && state_ == kConnected)
+    {
+        struct pollfd pf;
+        memset(&pf, 0, sizeof(pf));
+        pf.fd = channel_->fd();
+        pf.events = POLLOUT | POLLERR | POLLHUP;
+
+        // co_poll 会将 fd 注册到 libco 的 epoll，然后 yield 当前协程
+        // 当 fd 可写时，协程被恢复执行
+        co_poll(co_get_epoll_ct(), &pf, 1, 1000);
+
+        if (pf.revents & (POLLOUT | POLLERR | POLLHUP))
+        {
+            ssize_t nwrote = ::write(channel_->fd(), data, remaining);
+            if (nwrote > 0)
+            {
+                data += nwrote;
+                remaining -= nwrote;
+            }
+            else if (errno != EAGAIN && errno != EWOULDBLOCK)
+            {
+                break;
+            }
+        }
+        else
+        {
+            break; // 超时
+        }
+    }
+
+    if (remaining == 0 && writeCompleteCallback_)
+    {
+        writeCompleteCallback_(shared_from_this());
     }
 }
 

@@ -1,6 +1,10 @@
 #include <EventLoopThread.h>
 #include <EventLoop.h>
 
+// libco 协程库：每个线程需要调用一次初始化
+#include <co_routine.h>
+#include <co_routine_inner.h>
+
 EventLoopThread::EventLoopThread(const ThreadInitCallback &cb,
                                  const std::string &name)
     : loop_(nullptr)
@@ -38,6 +42,9 @@ EventLoop *EventLoopThread::startLoop()
 // 下面这个方法 是在单独的新线程里运行的
 void EventLoopThread::threadFunc()
 {
+    // 初始化 libco 协程环境（每个线程只需调用一次）
+    co_init_curr_thread_env();
+
     EventLoop loop; // 创建一个独立的EventLoop对象 和上面的线程是一一对应的 级one loop per thread
 
     if (callback_)

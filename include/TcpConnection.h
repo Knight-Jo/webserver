@@ -38,7 +38,10 @@ public:
 
     // 发送数据
     void send(const std::string &buf);
-    void sendFile(int fileDescriptor, off_t offset, size_t count); 
+    void sendFile(int fileDescriptor, off_t offset, size_t count);
+
+    // 协程安全的发送：当内核发送缓冲区满时 yield 而非阻塞线程
+    void sendCo(const std::string &buf);
     
     // 关闭半连接
     void shutdown();

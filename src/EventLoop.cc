@@ -9,6 +9,10 @@
 #include <Channel.h>
 #include <Poller.h>
 
+// libco 协程调度接口
+#include <co_routine.h>
+#include <co_routine_inner.h>
+
 // 防止一个线程创建多个EventLoop
 thread_local EventLoop *t_loopInThisThread = nullptr;
 
@@ -97,6 +101,9 @@ void EventLoop::loop()
          * mainloop调用queueInLoop将回调加入subloop（该回调需要subloop执行 但subloop还在poller_->poll处阻塞） queueInLoop通过wakeup将subloop唤醒
          **/
         doPendingFunctors();
+
+        // 驱动 libco 协程调度（非阻塞，仅处理就绪事件）
+        co_schedule_tick();
     }
     LOG_INFO<<"EventLoopstop looping";
     looping_ = false;
@@ -207,4 +214,17 @@ void EventLoop::doPendingFunctors()
     }
 
     callingPendingFunctors_ = false;
+}
+
+// 驱动 libco 协程调度：非阻塞地处理 epoll 就绪事件和超时，恢复等待的协程
+void EventLoop::co_schedule_tick()
+{
+    // 若当前线程未初始化 libco 环境（如 main reactor），直接返回
+    if (!co_get_curr_thread_env())
+    {
+        return;
+    }
+
+    // 一次 tick：非阻塞 poll + 处理就绪事件 + 处理超时 + 恢复协程
+    co_eventloop_tick(co_get_epoll_ct());
 }

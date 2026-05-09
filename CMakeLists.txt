@@ -9,6 +9,7 @@ set (CMAKE_CXX_STANDARD_REQUIRED True)
 
 #设置头文件目录，供所有子项目使用
 include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/libco)
 
 
 # 设置输出目录
@@ -19,7 +20,8 @@ add_compile_options(-g)
 
 #设置全局链接库
 set(LIBS
-    pthread 
+    pthread
+    dl
 )
 
 # Optional gperftools (CPU profiler)
@@ -37,5 +39,6 @@ endif()
 add_subdirectory(src)
 add_subdirectory(memory)
 add_subdirectory(log)
+add_subdirectory(libco)
 add_subdirectory(benchmarks)
 add_subdirectory(tests)
