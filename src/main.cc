@@ -76,7 +76,7 @@ int main(int argc,char *argv[]) {
     EventLoop loop;
     InetAddress addr(8080, "0.0.0.0");
     HttpServer server(&loop, addr, "HttpServer");
-    server.setThreadNum(3);
+    server.setThreadNum(16);
     server.addRoute("GET", "/", [](const HttpRequest &, HttpResponse *response) {
         response->setHeader("Content-Type", "text/plain");
         response->setBody("Hello, world");
