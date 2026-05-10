@@ -1,122 +1,179 @@
-# C++项目推荐：kama-webserver | 代码随想录
+# kama-webserver
 
-**本项目目前只在[知识星球](https://programmercarl.com/other/kstar.html)里维护，并答疑**
+基于 Reactor 模式的高性能 C++ Web 服务器，支持 HTTP/1.0、异步日志、内存池、LFU 缓存。
 
-最近[知识星球](https://programmercarl.com/other/kstar.html)里的项目开启翻新计划，为了应变每年校招求职的变化，很多星球老项目都重构代码并重写项目文档了。
+**本项目在[知识星球](https://programmercarl.com/other/kstar.html)里维护，并答疑**
 
-这期给大家重构的项目是 23年在[知识星球](https://programmercarl.com/other/kstar.html)里发布的webserver项目。
+---
 
-## 老生常淡，webserver还能做吗？
+## 架构
 
-关于C++的项目，大家都会知道 webserver。
+经典「one loop per thread」Reactor 模型：
 
-有一个段子：C++选手人均webserver。
+```
+mainLoop (accept 连接)
+    │
+    ├── subLoop 1 [epoll_wait → 处理多个连接的读写]
+    ├── subLoop 2 [epoll_wait → 处理多个连接的读写]
+    └── subLoop N [epoll_wait → 处理多个连接的读写]
+```
 
-我得给webserver“伸冤”一下，其实**webserver是一个非常好的学习项目，只是这个项目的形式“烂大街”了**，它所涉及的知识依然是经典的。
+### 核心模块
 
-webserver 所涉及到的知识：
+| 模块 | 说明 |
+|------|------|
+| **EventLoop** | 核心事件循环，封装 epoll_wait，通过 eventfd 实现跨线程唤醒 |
+| **EPollPoller** | epoll I/O 多路复用，管理 fd 的注册/更新/删除 |
+| **TcpServer** | 用户态服务端 API，管理线程池和连接生命周期 |
+| **HttpServer** | HTTP 协议层，路由分发请求到业务 handler |
+| **AsyncLogging** | 双缓冲异步日志，后端线程批量写入磁盘 |
+| **memoryPool** | 固定大小 slot 分配器（8-512 字节），减少内存碎片 |
+| **KLfuCache** | LFU 淘汰策略缓存，支持频率衰减防老化 |
+| **TimerQueue** | 基于 timerfd 的定时器管理，支持一次性/重复定时器 |
 
-* C++八股（C/C++语法全覆盖、内存管理等、可以扩展至C++11/17）
-* 操作系统（线程、进程、锁、还有大量的 I/O 系统调用及其封装还有 EPOLL 等多路复用机制）
-* 网络（网络编程，通信，网络异常的处理）
-* 数据库（注册中心的数据库语句、负载均衡等）
-* 还有设计模式、缓存设计，日志系统，定时器模块等等
+---
 
-**大家背的八股，无非就是 网络，操作系统和数据库，还有C++八股，webserver基本都包含了**，**webserver是八股结合实战非常好的案例**！
+## 快速开始
 
-可以理解成：**webserver 就是大家背的八股的实战篇**。
+### 构建
 
-webserver 也可以称之为高性能服务器，因为他算是服务器开发，不少录友在简历上不写webserver这个名字，而写的是高性能服务器。
+```bash
+cd build && cmake .. && make -j$(nproc)
+```
 
-换一个名字好像高级了一些。。。
+### 运行
 
-如果你时间充裕，想系统学习C++，做webserver是非常好的选择，你会发现自己背的八股都活学活用了。
+```bash
+./bin/main
+# 服务监听 0.0.0.0:8080
+```
 
-当然，简历上一个webserver 是不够的，还需要再做一个项目。 [知识星球](https://programmercarl.com/other/kstar.html)里有众多项目可以选：
+### 测试
 
-如果你时间紧张，那就别做webserver了，本来形式就是“烂大街”的。
+```bash
+# HTTP 功能测试
+./build/http_tests
 
-webserver是用来打基础的，也没时间打基础，就把相关八股背一背，突击做一些新颖一些的项目。[知识星球](https://programmercarl.com/other/kstar.html)里目前有10个C++的项目可以选择。
+# 日志性能测试
+./build/log_benchmark
+./build/log_stress
+./build/log_sync_vs_async
 
-## 高性能服务器项目第二版
+# HTTP 压力测试
+./build/http_benchmark
 
+# 一键性能基准测试（含分支对比）
+./benchmark.sh [branch_name] [server_binary]
+./benchmark.sh compare   # 自动对比 main 和 feat/libco-integration
+```
 
-文档方面，相对与[第一版](https://mp.weixin.qq.com/s/40ISnd7PkBtAlWv5MQf1vQ) 做了如下优化：
+---
 
-1、开篇：讲述了为什么要学习webserver，以及学习webserver需要什么基础知识。
+## API 路由
 
-2、大纲：讲述了整个文章的框架结构。
+### GET `/`
 
-3、框架梳理：讲述了webserver整体的架构如网络模块、定时器模块、内存池、LFU、日志系统等。
+返回 "Hello, world"。
 
-4、代码模块：讲述了上面提到模块以及内存池、LFU的核心代码部分。
+```bash
+curl http://localhost:8080/
+```
 
-5、面试问题：整理了星球录友亲身经历的问题
+### POST `/echo`
 
-6、补充简历写法。
+回显请求 body。
 
-## 高性能服务器专栏
+```bash
+curl -X POST -d "hello" http://localhost:8080/echo
+```
 
-该项目的专栏是[知识星球](https://programmercarl.com/other/kstar.html)录友专享的。
+### GET `/file`（阻塞 I/O 对比）
 
-项目专栏依然是将 「简历写法」给大家列出来了，大家学完就可以参考这个来写简历：
+读取 `/proc/self/status`。handler 内 `read()` 是阻塞调用，会阻塞整个 EventLoop 线程。
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307105143.png' width=500 alt=''></img></div>
+### GET `/resolve?host=<domain>`（阻塞 I/O 对比）
 
-做完该项目，面试中大概率会有哪些面试问题，以及如何回答，也列出好了：
+DNS 解析，返回 IP 地址列表。`getaddrinfo()` 阻塞直到 DNS 查询完成。
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307105324.png' width=500 alt=''></img></div>
+### GET `/fetch?host=<host>&port=<port>&path=<path>`（阻塞 I/O 对比）
 
-专栏中的项目面试题都掌握的话，这个项目在面试中基本没问题。
+模拟反向代理：DNS 解析 → 创建 socket → connect → 发送 HTTP GET → recv 响应。全程阻塞。
 
-很多录友在做项目的时候，把项目运行起来 就是第一大难点！
+### GET `/pingback?host=<host>&port=<port>`（阻塞 I/O 对比）
 
-本项目运行起来 需要依赖的环境很多，所以我给大家准备的 自动化环境配置脚本， **项目运行环境，一键配置！ 不需要大家去处理环境问题了**：
+连接回自身，发送 GET / 请求并读取响应。同样全程阻塞。
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307105632.png' width=500 alt=''></img></div>
+> 以上阻塞 I/O 路由用于与 `feat/libco-integration` 分支的协程版本做性能对比。
 
+---
 
-框架梳理：
+## 性能测试
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307105726.png' width=500 alt=''></img></div>
+### 测试环境
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307105931.png' width=500 alt=''></img></div>
+- CPU: 16 核 Intel
+- 内核: Linux 6.6.114.1 WSL2
+- 压测工具: Apache Bench (ab)
+- 测试模式: HTTP Keep-Alive
+- 工作线程数: 16
 
-底层网络模块架构：
+### 吞吐量（GET /）
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307105758.png' width=500 alt=''></img></div>
+| 并发 | 请求数 | RPS | 平均延迟 |
+|------|--------|-----|---------|
+| 1 | 10,000 | 11,483 | 0.087ms |
+| 10 | 50,000 | 27,671 | 0.361ms |
+| 50 | 100,000 | 49,893 | 1.002ms |
+| 100 | 200,000 | 60,353 | 1.657ms |
+| 200 | 200,000 | 64,188 | 3.116ms |
 
-代码讲解：
+详细测试数据见 `bench_results/` 目录。
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307110003.png' width=500 alt=''></img></div>
+---
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307110035.png' width=500 alt=''></img></div>
+## 构建依赖
 
-日志系统的设计：
+- Linux (epoll)
+- CMake >= 2.8
+- C++11 编译器
+- pthread
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307110057.png' width=500 alt=''></img></div>
+可选：gperftools（CPU profiling，cmake 自动检测）
 
-缓冲区的设计：
+---
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307110130.png' width=500 alt=''></img></div>
+## 项目文件结构
 
-内存管理设计：
+```
+├── src/              # 网络核心 + HTTP 层源码
+├── include/          # 头文件
+├── log/              # 异步日志模块
+├── memory/           # 内存池模块
+├── benchmarks/       # 性能测试
+├── tests/            # 单元测试
+├── libco/            # 协程库（feat/libco-integration 分支）
+├── doc/              # 文档
+└── build/            # 构建目录
+```
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307110205.png' width=500 alt=''></img></div>
+---
 
-线程池：
+## 更多文档
 
-<div align="center"><img src='https://file1.kamacoder.com/i/algo/20250307110234.png' width=500 alt=''></img></div>
+- [异步日志系统详解](doc/async-logging-tutorial.md)
+- [libco 集成指南](doc/libco-integration-guide.md)（feat/libco-integration 分支）
+- [性能对比分析](doc/performance-comparison.md)
 
-## 答疑
+---
 
-本项目在[知识星球](https://programmercarl.com/other/kstar.html)里为 文字专栏形式，大家不用担心，看不懂，星球里每个项目有专属答疑群，任何问题都可以在群里问，都会得到解答：
+## 知识星球
+
+本项目在[知识星球](https://programmercarl.com/other/kstar.html)中以文字专栏形式提供完整讲解，包括：
+
+- 项目框架梳理与架构设计
+- 各模块核心代码讲解
+- 面试常见问题与回答思路
+- 简历写法指导
+- 专属答疑群
 
 ![](https://file1.kamacoder.com/i/web/2025-09-26_11-30-13.jpg)
-
-
-
-## 下载方式
-
-**本文档仅为星球内部专享，大家可以加入[知识星球](https://programmercarl.com/other/kstar.html)里获取，在星球置顶一**
-
