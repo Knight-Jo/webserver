@@ -108,17 +108,23 @@ int main(int argc,char *argv[]) {
         response->setHeader("Content-Type", "text/plain");
         auto it = req.queryParams().find("host");
         std::string host = (it != req.queryParams().end()) ? it->second : "localhost";
-        struct hostent *he = ::gethostbyname(host.c_str());  // 阻塞 — DNS 查询期间整个线程卡住
-        if (!he) {
-            response->setBody("DNS resolution failed for: " + host);
+        struct addrinfo hints, *res = nullptr;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        int ret = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
+        if (ret != 0 || !res) {
+            response->setBody("DNS resolution failed for: " + host + " (" + ::gai_strerror(ret) + ")");
             return;
         }
         std::string result = "Host: " + host + "\nIP addresses:\n";
         char ip[64];
-        for (int i = 0; he->h_addr_list[i]; ++i) {
-            inet_ntop(he->h_addrtype, he->h_addr_list[i], ip, sizeof(ip));
+        for (struct addrinfo *rp = res; rp != nullptr; rp = rp->ai_next) {
+            struct sockaddr_in *sin = (struct sockaddr_in *)rp->ai_addr;
+            inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
             result += "  " + std::string(ip) + "\n";
         }
+        ::freeaddrinfo(res);
         response->setBody(result);
     });
 
@@ -132,11 +138,15 @@ int main(int argc,char *argv[]) {
         int port = std::stoi(getParam("port", "80"));
         std::string path = getParam("path", "/get");
 
-        struct hostent *he = ::gethostbyname(host.c_str());  // 阻塞
-        if (!he) { response->setBody("DNS resolution failed"); return; }
+        struct addrinfo hints, *res = nullptr;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        int ret = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
+        if (ret != 0 || !res) { response->setBody("DNS resolution failed"); return; }
 
         int sock = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (sock < 0) { response->setBody("socket() failed"); return; }
+        if (sock < 0) { ::freeaddrinfo(res); response->setBody("socket() failed"); return; }
 
         // 设置 blocking socket
         int flags = ::fcntl(sock, F_GETFL, 0);
@@ -146,7 +156,9 @@ int main(int argc,char *argv[]) {
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
-        memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+        memcpy(&addr.sin_addr, &sin->sin_addr, sizeof(sin->sin_addr));
+        ::freeaddrinfo(res);
 
         if (::connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {  // 阻塞
             ::close(sock);
@@ -189,9 +201,15 @@ int main(int argc,char *argv[]) {
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
-        struct hostent *he = ::gethostbyname(host.c_str());  // 阻塞
-        if (!he) { response->setBody("DNS failed"); return; }
-        memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+        struct addrinfo hints, *res = nullptr;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        int ret = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
+        if (ret != 0 || !res) { response->setBody("DNS failed"); return; }
+        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+        memcpy(&addr.sin_addr, &sin->sin_addr, sizeof(sin->sin_addr));
+        ::freeaddrinfo(res);
 
         int sock = ::socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) { response->setBody("socket failed"); return; }
