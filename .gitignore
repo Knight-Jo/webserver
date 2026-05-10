@@ -2,6 +2,8 @@
 /lib/**
 /build/**
 /logs/**
+/bench_results/**
+*.prof
 
 
 tags

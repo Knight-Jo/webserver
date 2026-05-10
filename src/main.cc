@@ -109,36 +109,40 @@ int main(int argc,char *argv[]) {
     // ========== 阻塞 I/O 演示路由 ==========
 
     // GET /resolve?host=example.com
-    // 演示 libco hook gethostbyname() —— DNS 解析期间协程 yield，不阻塞线程
+    // DNS 解析（非阻塞，协程 yield）
     server.addRoute("GET", "/resolve", [](const HttpRequest &req, HttpResponse *response) {
         response->setHeader("Content-Type", "text/plain");
 
         auto it = req.queryParams().find("host");
         std::string host = (it != req.queryParams().end()) ? it->second : "localhost";
 
-        // gethostbyname() 被 libco hook
-        // 内部通过 __poll() 在 DNS socket 上等待 → 协程 yield
-        struct hostent *he = ::gethostbyname(host.c_str());
-        if (!he)
+        struct addrinfo hints, *res = nullptr;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        int ret = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
+        if (ret != 0 || !res)
         {
-            response->setBody("DNS resolution failed for: " + host);
+            response->setBody("DNS resolution failed for: " + host + " (" + ::gai_strerror(ret) + ")");
             return;
         }
 
         std::string result = "Host: " + host + "\nIP addresses:\n";
         char ip[64];
-        for (int i = 0; he->h_addr_list[i]; ++i)
+        for (struct addrinfo *rp = res; rp != nullptr; rp = rp->ai_next)
         {
-            inet_ntop(he->h_addrtype, he->h_addr_list[i], ip, sizeof(ip));
+            struct sockaddr_in *sin = (struct sockaddr_in *)rp->ai_addr;
+            inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip));
             result += "  " + std::string(ip) + "\n";
         }
+        ::freeaddrinfo(res);
 
         response->setBody(result);
     });
 
     // GET /fetch?host=HOST&port=80&path=/
     // 在协程内部创建 TCP 连接并发送 HTTP 请求
-    // 演示 hooked: gethostbyname → socket → connect → send → recv → close
+    // 演示 hooked: getaddrinfo → socket → connect → send → recv → close
     server.addRoute("GET", "/fetch", [](const HttpRequest &req, HttpResponse *response) {
         response->setHeader("Content-Type", "text/plain");
 
@@ -151,9 +155,13 @@ int main(int argc,char *argv[]) {
         int port = std::stoi(getParam("port", "80"));
         std::string path = getParam("path", "/get");
 
-        // 1. DNS 解析 —— 被 libco hook，协程 yield 等待 DNS 响应
-        struct hostent *he = ::gethostbyname(host.c_str());
-        if (!he)
+        // 1. DNS 解析（非阻塞，协程 yield）
+        struct addrinfo hints, *res = nullptr;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        int ret = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
+        if (ret != 0 || !res)
         {
             response->setBody("DNS resolution failed: " + host);
             return;
@@ -163,6 +171,7 @@ int main(int argc,char *argv[]) {
         int sock = ::socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0)
         {
+            ::freeaddrinfo(res);
             response->setBody("socket() failed");
             return;
         }
@@ -171,7 +180,9 @@ int main(int argc,char *argv[]) {
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
-        memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+        memcpy(&addr.sin_addr, &sin->sin_addr, sizeof(sin->sin_addr));
+        ::freeaddrinfo(res);
 
         // 3. connect —— 被 libco hook
         // 非阻塞 socket + EINPROGRESS → 进入 poll() 等待 → 协程 yield
@@ -251,15 +262,21 @@ int main(int argc,char *argv[]) {
         std::string host = getParam("host", "127.0.0.1");
         int port = std::stoi(getParam("port", "8080"));
 
-        // 1. DNS（如果 host 是域名，会被 hook → yield）
+        // 1. DNS（非阻塞，协程 yield）
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
 
-        struct hostent *he = ::gethostbyname(host.c_str());
-        if (!he) { response->setBody("DNS failed"); return; }
-        memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+        struct addrinfo hints, *res = nullptr;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        int ret = ::getaddrinfo(host.c_str(), nullptr, &hints, &res);
+        if (ret != 0 || !res) { response->setBody("DNS failed"); return; }
+        struct sockaddr_in *sin = (struct sockaddr_in *)res->ai_addr;
+        memcpy(&addr.sin_addr, &sin->sin_addr, sizeof(sin->sin_addr));
+        ::freeaddrinfo(res);
 
         // 2. socket
         int sock = ::socket(AF_INET, SOCK_STREAM, 0);
